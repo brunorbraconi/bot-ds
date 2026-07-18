@@ -3,7 +3,6 @@ config();
 
 import { client } from './client';
 import { logger } from './utils/logger';
-import { playerManager } from './music/PlayerManager';
 import { closeDb } from './utils/database';
 import fs from 'fs';
 import path from 'path';
