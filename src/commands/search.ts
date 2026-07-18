@@ -6,10 +6,10 @@ import {
   StringSelectMenuBuilder,
   ComponentType,
 } from 'discord.js';
-import play from 'play-dl';
 import { playerManager } from '../music/PlayerManager';
 import { trackEmbed } from '../utils/embed';
-import { Track, TrackSource } from '../music/Track';
+import { searchYoutube, resolveTrack } from '../utils/resolver';
+import { Track } from '../music/Track';
 
 export const data = new SlashCommandBuilder()
   .setName('search')
@@ -30,7 +30,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const query = interaction.options.getString('query', true);
 
   try {
-    const results = await play.search(query, { limit: 10 });
+    const results = await searchYoutube(query, 10);
     if (results.length === 0) {
       return interaction.editReply('❌ No se encontraron resultados.');
     }
@@ -42,7 +42,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         results.map((r, i) => ({
           label: (r.title ?? 'Unknown').slice(0, 100),
           value: String(i),
-          description: `${r.channel?.name ?? 'Unknown'} - ${r.durationRaw ?? '0:00'}`.slice(0, 100),
+          description: `${r.channel ?? 'Unknown'}`.slice(0, 100),
         }))
       );
 
@@ -68,17 +68,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
       const index = parseInt(selectInteraction.values[0], 10);
       const r = results[index];
+      const videoUrl = r.webpage_url || r.url;
+      if (!videoUrl) {
+        return interaction.editReply({ content: '❌ No se pudo obtener la URL del video.', components: [] });
+      }
 
-      const track: Track = {
-        url: r.url!,
-        title: r.title ?? 'Unknown',
-        duration: r.durationRaw ?? '0:00',
-        durationMs: (r.durationInSec ?? 0) * 1000,
-        source: 'youtube',
-        thumbnail: r.thumbnails?.[0]?.url,
-        author: r.channel?.name,
-        requestedBy: member.displayName,
-      };
+      const resolved = await resolveTrack(videoUrl, member.displayName);
+      const track = Array.isArray(resolved) ? resolved[0] : resolved;
 
       const player = playerManager.create(interaction.guildId!);
       if (!playerManager.has(interaction.guildId!) || !player.current) {

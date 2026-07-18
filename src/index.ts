@@ -1,6 +1,15 @@
 import { config } from 'dotenv';
 config();
 
+try {
+  const ffmpegPath = require('ffmpeg-static') as string;
+  process.env.FFMPEG_PATH = ffmpegPath;
+  const ffmpegDir = require('path').dirname(ffmpegPath);
+  process.env.PATH = ffmpegDir + require('path').delimiter + process.env.PATH;
+} catch {
+  // ffmpeg-static not available
+}
+
 import { client } from './client';
 import { logger } from './utils/logger';
 import { closeDb } from './utils/database';
@@ -31,7 +40,7 @@ client.on('interactionCreate', async (interaction) => {
   try {
     await execute(interaction);
   } catch (err: any) {
-    logger.error(`Error executing ${interaction.commandName}:`, err.message);
+    logger.error(`Error executing ${interaction.commandName}:`, err);
     if (interaction.replied || interaction.deferred) {
       await interaction.editReply(`❌ Error: ${err.message}`);
     } else {

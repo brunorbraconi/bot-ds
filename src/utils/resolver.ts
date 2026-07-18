@@ -1,118 +1,144 @@
-import play, { SoundCloudTrack, SoundCloudPlaylist } from 'play-dl';
+import { spawn } from 'child_process';
 import { Track, TrackSource } from '../music/Track';
 
-function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
+interface YTEntry {
+  title?: string;
+  url?: string;
+  webpage_url?: string;
+  duration?: number;
+  thumbnail?: string;
+  channel?: string;
+  uploader?: string;
+}
+
+interface YTResult {
+  _type?: string;
+  title?: string;
+  duration?: number;
+  thumbnail?: string;
+  channel?: string;
+  uploader?: string;
+  entries?: YTEntry[];
+}
+
+const YT_DLP = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
+const FLAGS = ['--dump-single-json', '--no-warnings', '--no-check-certificate', '--flat-playlist'];
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function sourceFromUrl(url: string): TrackSource | null {
-  if (/youtube\.com|youtu\.be/.test(url)) return 'youtube';
-  if (/soundcloud\.com/.test(url)) return 'soundcloud';
-  return null;
+function runYtDlp(url: string): Promise<YTResult> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(YT_DLP, [url, ...FLAGS], {
+      windowsHide: true,
+      timeout: 30_000,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    proc.on('error', (err) => reject(err));
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`yt-dlp exited with code ${code}: ${stderr.slice(0, 200)}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (e) {
+        reject(new Error('Failed to parse yt-dlp output'));
+      }
+    });
+  });
 }
 
 export async function resolveTrack(
   query: string,
   requestedBy: string
 ): Promise<Track | Track[]> {
-  const isUrl = /^https?:\/\//.test(query);
+  const baseFlags = [...FLAGS];
 
-  if (!isUrl) {
-    const results = await play.search(query, { limit: 1 });
-    if (results.length === 0) throw new Error('No results found');
-    const r = results[0];
+  if (/^https?:\/\//.test(query)) {
+    const result = await runYtDlp(query);
+
+    if (result._type === 'playlist' || result._type === 'url_playlist') {
+      const entries = result.entries || [];
+      if (entries.length === 0) throw new Error('La playlist está vacía.');
+
+      return Promise.all(
+        entries.map(async (entry: YTEntry) => {
+          const videoUrl = entry.webpage_url || entry.url;
+          if (!videoUrl) return null;
+          try {
+            const info = await runYtDlp(videoUrl);
+            return {
+              url: videoUrl,
+              title: entry.title ?? info.title ?? 'Unknown',
+              duration: formatDuration(info.duration ?? 0),
+              durationMs: (info.duration ?? 0) * 1000,
+              source: 'youtube' as TrackSource,
+              thumbnail: info.thumbnail,
+              author: info.channel ?? info.uploader,
+              requestedBy,
+            } as Track;
+          } catch {
+            return {
+              url: videoUrl,
+              title: entry.title ?? 'Unknown',
+              duration: '0:00',
+              durationMs: 0,
+              source: 'youtube' as TrackSource,
+              requestedBy,
+            } as Track;
+          }
+        })
+      ).then((tracks) => tracks.filter(Boolean) as Track[]);
+    }
+
     return {
-      url: r.url!,
-      title: r.title ?? 'Unknown',
-      duration: r.durationRaw ?? '0:00',
-      durationMs: (r.durationInSec ?? 0) * 1000,
+      url: query,
+      title: result.title ?? 'Unknown',
+      duration: formatDuration(result.duration ?? 0),
+      durationMs: (result.duration ?? 0) * 1000,
       source: 'youtube',
-      thumbnail: r.thumbnails?.[0]?.url,
-      author: r.channel?.name,
+      thumbnail: result.thumbnail,
+      author: result.channel ?? result.uploader,
       requestedBy,
     };
   }
 
-  const source = sourceFromUrl(query);
-  if (!source) throw new Error('URL no soportada. Usa YouTube o SoundCloud.');
+  // Search query
+  const searchResult = await runYtDlp(`ytsearch1:${query}`);
+  const entries = searchResult.entries;
+  if (!entries || entries.length === 0) throw new Error('No se encontraron resultados.');
 
-  if (source === 'youtube') {
-    if (/playlist\?list=|youtu\.be\/.*\?list=/.test(query)) {
-      return resolveYoutubePlaylist(query, requestedBy);
-    }
-    return resolveYoutubeVideo(query, requestedBy);
-  }
+  const first = entries[0];
+  const videoUrl = first.webpage_url || first.url;
+  if (!videoUrl) throw new Error('No se pudo obtener la URL del video.');
 
-  if (source === 'soundcloud') {
-    if (/\/sets\//.test(query)) {
-      return resolveSoundcloudPlaylist(query, requestedBy);
-    }
-    return resolveSoundcloudTrack(query, requestedBy);
-  }
+  const info = await runYtDlp(videoUrl);
 
-  throw new Error('No se pudo resolver el track');
-}
-
-async function resolveYoutubeVideo(url: string, requestedBy: string): Promise<Track> {
-  const info = await play.video_info(url);
-  const v = info.video_details;
   return {
-    url: v.url!,
-    title: v.title!,
-    duration: v.durationRaw,
-    durationMs: (v.durationInSec ?? 0) * 1000,
+    url: videoUrl,
+    title: info.title ?? first.title ?? 'Unknown',
+    duration: formatDuration(info.duration ?? 0),
+    durationMs: (info.duration ?? 0) * 1000,
     source: 'youtube',
-    thumbnail: v.thumbnails?.[0]?.url,
-    author: v.channel?.name,
-    requestedBy,
-  };
-}
-
-async function resolveYoutubePlaylist(url: string, requestedBy: string): Promise<Track[]> {
-  const pl = await play.playlist_info(url);
-  const videos = await pl.all_videos();
-  return videos.map((v) => ({
-    url: v.url!,
-    title: v.title ?? 'Unknown',
-    duration: v.durationRaw ?? '0:00',
-    durationMs: (v.durationInSec ?? 0) * 1000,
-    source: 'youtube' as TrackSource,
-    thumbnail: v.thumbnails?.[0]?.url,
-    author: v.channel?.name,
-    requestedBy,
-  }));
-}
-
-async function resolveSoundcloudTrack(url: string, requestedBy: string): Promise<Track> {
-  const info = (await play.soundcloud(url)) as SoundCloudTrack;
-  return {
-    url: info.url,
-    title: info.name,
-    duration: formatDuration(info.durationInMs),
-    durationMs: info.durationInMs,
-    source: 'soundcloud',
     thumbnail: info.thumbnail,
-    author: info.user?.name,
+    author: info.channel ?? info.uploader,
     requestedBy,
   };
 }
 
-async function resolveSoundcloudPlaylist(url: string, requestedBy: string): Promise<Track[]> {
-  const info = (await play.soundcloud(url)) as SoundCloudPlaylist;
-  const tracks = info.tracks as SoundCloudTrack[];
-  return tracks.map((t) => ({
-    url: t.url ?? t.permalink,
-    title: t.name ?? 'Unknown',
-    duration: formatDuration(t.durationInMs ?? 0),
-    durationMs: t.durationInMs ?? 0,
-    source: 'soundcloud' as TrackSource,
-    thumbnail: t.thumbnail,
-    author: t.user?.name,
-    requestedBy,
-  }));
+export async function searchYoutube(query: string, limit: number = 10): Promise<YTEntry[]> {
+  const result = await runYtDlp(`ytsearch${limit}:${query}`);
+  return result.entries || [];
 }

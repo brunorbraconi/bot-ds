@@ -1,4 +1,4 @@
-export type TrackSource = 'youtube' | 'soundcloud';
+export type TrackSource = 'youtube';
 
 export interface Track {
   url: string;

@@ -54,7 +54,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     await interaction.editReply({ embeds: [embed] });
   } catch (err: any) {
-    logger.error(`[${guildId}] Play error:`, err.message);
+    logger.error(`[${guildId}] Play error:`, err);
     await interaction.editReply(`❌ Error: ${err.message}`);
   }
 }

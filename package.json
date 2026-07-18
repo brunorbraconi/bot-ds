@@ -9,13 +9,14 @@
     "register": "tsx src/deploy-commands.ts"
   },
   "dependencies": {
-    "@discordjs/voice": "^0.18.0",
+    "@discordjs/opus": "^0.10.0",
+    "@discordjs/voice": "^1.0.0-dev.1784333790-d29e25d24",
     "better-sqlite3": "^11.7.0",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
     "ffmpeg-static": "^5.2.0",
-    "play-dl": "^1.9.7",
-    "zod": "^3.24.2"
+    "tweetnacl": "^1.0.3",
+    "youtube-dl-exec": "^3.1.9"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

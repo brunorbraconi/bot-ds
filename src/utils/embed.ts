@@ -3,7 +3,6 @@ import { Track } from '../music/Track';
 
 const COLORS: Record<string, ColorResolvable> = {
   youtube: 0xFF0000,
-  soundcloud: 0xFF7700,
   default: 0x5865F2,
 };
 
