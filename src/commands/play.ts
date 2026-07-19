@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, GuildMember } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, GuildMember, TextChannel } from 'discord.js';
 import { playerManager } from '../music/PlayerManager';
 import { resolveTrack } from '../utils/resolver';
 import { trackEmbed } from '../utils/embed';
@@ -36,6 +36,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     if (!playerManager.has(guildId) || !player.current) {
       await player.connect(voiceChannel.id);
     }
+
+    if (interaction.channel) player.setTextChannel(interaction.channel as TextChannel);
 
     player.addTracks(tracks);
 

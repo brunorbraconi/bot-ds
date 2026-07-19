@@ -1,5 +1,6 @@
 import { EmbedBuilder, ColorResolvable } from 'discord.js';
 import { Track } from '../music/Track';
+import type { LoopMode } from '../music/GuildPlayer';
 
 const COLORS: Record<string, ColorResolvable> = {
   youtube: 0xFF0000,
@@ -43,4 +44,19 @@ export function queueEmbed(tracks: Track[], current: Track | null, loop: string)
   }
 
   return embed;
+}
+
+export function nowPlayingEmbed(track: Track, loop: LoopMode, volume: number, isPaused: boolean): EmbedBuilder {
+  const status = isPaused ? '⏸️ En pausa' : '▶️ Reproduciendo';
+  return new EmbedBuilder()
+    .setColor(COLORS[track.source] ?? COLORS.default)
+    .setTitle(status)
+    .setDescription(`[${track.title}](${track.url})`)
+    .addFields(
+      { name: 'Duración', value: track.duration, inline: true },
+      { name: 'Loop', value: loop, inline: true },
+      { name: 'Volumen', value: `${volume}%`, inline: true },
+    )
+    .setThumbnail(track.thumbnail ?? null)
+    .setFooter({ text: `Solicitado por ${track.requestedBy}` });
 }

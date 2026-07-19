@@ -10,9 +10,12 @@ try {
   // ffmpeg-static not available
 }
 
+import { GuildMember } from 'discord.js';
 import { client } from './client';
 import { logger } from './utils/logger';
 import { closeDb } from './utils/database';
+import { playerManager } from './music/PlayerManager';
+import type { LoopMode } from './music/GuildPlayer';
 import fs from 'fs';
 import path from 'path';
 
@@ -29,6 +32,49 @@ for (const file of commandFiles) {
 }
 
 client.on('interactionCreate', async (interaction) => {
+  if (interaction.isButton()) {
+    const guildId = interaction.guildId;
+    if (!guildId) return;
+
+    const player = playerManager.get(guildId);
+    if (!player) {
+      return interaction.reply({ content: '❌ No hay reproducción activa.', ephemeral: true });
+    }
+
+    const member = interaction.member as GuildMember;
+    if (!member.voice.channel) {
+      return interaction.reply({ content: '❌ Debes estar en un canal de voz.', ephemeral: true });
+    }
+
+    const customId = interaction.customId;
+
+    if (customId.startsWith('music_pause_')) {
+      player.pause();
+      await interaction.deferUpdate();
+    } else if (customId.startsWith('music_resume_')) {
+      player.resume();
+      await interaction.deferUpdate();
+    } else if (customId.startsWith('music_skip_')) {
+      player.skip();
+      await interaction.deferUpdate();
+    } else if (customId.startsWith('music_stop_')) {
+      player.stop();
+      await interaction.deferUpdate();
+    } else if (customId.startsWith('music_queue_')) {
+      const { queueEmbed } = await import('./utils/embed');
+      const embed = queueEmbed(player.allTracks, player.current, player.loop);
+      await interaction.reply({ embeds: [embed], ephemeral: true });
+    } else if (customId.startsWith('music_loop_')) {
+      const modes: LoopMode[] = ['none', 'track', 'queue'];
+      const currentIndex = modes.indexOf(player.loop);
+      const nextMode = modes[(currentIndex + 1) % modes.length];
+      player.setLoop(nextMode);
+      await player.sendNowPlayingMessage();
+      await interaction.deferUpdate();
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const execute = commands.get(interaction.commandName);

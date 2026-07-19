@@ -9,9 +9,11 @@ import {
   VoiceConnectionStatus,
   StreamType,
 } from '@discordjs/voice';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Message, TextChannel } from 'discord.js';
 import { Track } from './Track';
 import { logger } from '../utils/logger';
 import { client } from '../client';
+import { nowPlayingEmbed } from '../utils/embed';
 import { spawn } from 'child_process';
 import ffmpegStatic from 'ffmpeg-static';
 import ytDlpExec from 'youtube-dl-exec';
@@ -32,6 +34,8 @@ export class GuildPlayer {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onIdle: (() => void) | null = null;
   private currentProcess: { yt?: any; ff?: any } | null = null;
+  private textChannel: TextChannel | null = null;
+  private nowPlayingMessage: Message | null = null;
 
   readonly guildId: string;
 
@@ -42,6 +46,7 @@ export class GuildPlayer {
 
     this.player.on(AudioPlayerStatus.Playing, () => {
       logger.info(`[${guildId}] Player: Playing`);
+      this.sendNowPlayingMessage();
     });
 
     this.player.on(AudioPlayerStatus.Idle, () => {
@@ -64,6 +69,19 @@ export class GuildPlayer {
   get loop(): LoopMode { return this.loopMode; }
   get volume(): number { return this.volumeLevel; }
   get allTracks(): Track[] { return [...this.queue]; }
+  get isPaused(): boolean { return this.player.state.status === AudioPlayerStatus.Paused; }
+
+  setTextChannel(channel: TextChannel): void { this.textChannel = channel; }
+
+  pause(): void {
+    this.player.pause();
+    this.sendNowPlayingMessage();
+  }
+
+  resume(): void {
+    this.player.unpause();
+    this.sendNowPlayingMessage();
+  }
 
   async connect(channelId: string): Promise<void> {
     const guild = client.guilds.cache.get(this.guildId);
@@ -111,6 +129,10 @@ export class GuildPlayer {
     this.player.stop(true);
     this.connection?.destroy();
     this.connection = null;
+    if (this.nowPlayingMessage) {
+      try { this.nowPlayingMessage.edit({ components: [] }); } catch {}
+      this.nowPlayingMessage = null;
+    }
   }
 
   destroy(): void {
@@ -157,6 +179,51 @@ export class GuildPlayer {
     return this.queue.splice(index, 1)[0];
   }
   clearQueue(): void { this.queue = []; }
+
+  async sendNowPlayingMessage(): Promise<void> {
+    if (!this.currentTrack || !this.textChannel) return;
+    const embed = nowPlayingEmbed(this.currentTrack, this.loopMode, this.volumeLevel, this.isPaused);
+    const rows = this.createPlayerButtons();
+    if (this.nowPlayingMessage) {
+      try {
+        await this.nowPlayingMessage.edit({ embeds: [embed], components: rows });
+        return;
+      } catch {
+        this.nowPlayingMessage = null;
+      }
+    }
+    try {
+      this.nowPlayingMessage = await this.textChannel.send({ embeds: [embed], components: rows });
+    } catch (err) {
+      logger.error(`[${this.guildId}] Failed to send now playing message:`, err);
+    }
+  }
+
+  private createPlayerButtons(): ActionRowBuilder<ButtonBuilder>[] {
+    const pauseResume = new ButtonBuilder()
+      .setCustomId(`music_${this.isPaused ? 'resume' : 'pause'}_${this.guildId}`)
+      .setEmoji(this.isPaused ? '▶️' : '⏸️')
+      .setStyle(ButtonStyle.Primary);
+    const skip = new ButtonBuilder()
+      .setCustomId(`music_skip_${this.guildId}`)
+      .setEmoji('⏭️')
+      .setStyle(ButtonStyle.Secondary);
+    const stop = new ButtonBuilder()
+      .setCustomId(`music_stop_${this.guildId}`)
+      .setEmoji('⏹️')
+      .setStyle(ButtonStyle.Danger);
+    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(pauseResume, skip, stop);
+    const queue = new ButtonBuilder()
+      .setCustomId(`music_queue_${this.guildId}`)
+      .setEmoji('📋')
+      .setStyle(ButtonStyle.Secondary);
+    const loop = new ButtonBuilder()
+      .setCustomId(`music_loop_${this.guildId}`)
+      .setEmoji(this.loopMode === 'track' ? '🔂' : '🔁')
+      .setStyle(this.loopMode === 'none' ? ButtonStyle.Secondary : ButtonStyle.Primary);
+    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(queue, loop);
+    return [row1, row2];
+  }
 
   private killProcess(): void {
     if (this.currentProcess) {
@@ -206,6 +273,7 @@ export class GuildPlayer {
       '-f', 'opus',
       '-ar', '48000',
       '-ac', '2',
+      '-b:a', '160k',
       'pipe:1',
     ], { windowsHide: true });
 
@@ -263,6 +331,12 @@ export class GuildPlayer {
     if (this.isDestroyed) return;
     if (this.loopMode === 'track' && finished) this.queue.unshift(finished);
     else if (this.loopMode === 'queue' && finished) this.queue.push(finished);
+    if (this.queue.length === 0 && finished && this.nowPlayingMessage) {
+      const embed = nowPlayingEmbed(finished, this.loopMode, this.volumeLevel, false)
+        .setTitle('✅ Terminado');
+      this.nowPlayingMessage.edit({ embeds: [embed], components: [] }).catch(() => {});
+      this.nowPlayingMessage = null;
+    }
     this.processQueue();
   }
 

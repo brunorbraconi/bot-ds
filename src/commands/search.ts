@@ -5,6 +5,7 @@ import {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   ComponentType,
+  TextChannel,
 } from 'discord.js';
 import { playerManager } from '../music/PlayerManager';
 import { trackEmbed } from '../utils/embed';
@@ -80,6 +81,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       if (!playerManager.has(interaction.guildId!) || !player.current) {
         await player.connect(voiceChannel.id);
       }
+
+      if (interaction.channel) player.setTextChannel(interaction.channel as TextChannel);
 
       player.addTrack(track);
       if (!player.current) {

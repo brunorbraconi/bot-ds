@@ -25,6 +25,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const mode = interaction.options.getString('mode', true) as LoopMode;
   player.setLoop(mode);
+  player.sendNowPlayingMessage();
 
   const labels: Record<LoopMode, string> = {
     none: '❌ Loop desactivado',
