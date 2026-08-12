@@ -25,11 +25,27 @@ interface YTResult {
   channel?: string;
   uploader?: string;
   entries?: YTEntry[];
+  formats?: { format_id?: string; acodec?: string; vcodec?: string }[];
 }
 
 const YT_DLP = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
-const FLAGS = ['--dump-single-json', '--no-warnings', '--no-check-certificate', '--flat-playlist'];
+const BASE_FLAGS = ['--dump-single-json', '--no-warnings', '--no-check-certificate', '--flat-playlist', '--ignore-no-formats-error'];
 const MAX_PLAYLIST_ITEMS = 500;
+
+export class AgeRestrictedError extends Error {}
+
+function getAuthFlags(): string[] {
+  const flags: string[] = [];
+  const browser = process.env.YT_COOKIES_FROM_BROWSER;
+  if (browser) flags.push('--cookies-from-browser', browser);
+  const cookies = process.env.YT_COOKIES_PATH;
+  if (cookies) flags.push('--cookies', cookies);
+  return flags;
+}
+
+export function hasAuth(): boolean {
+  return Boolean(process.env.YT_COOKIES_FROM_BROWSER || process.env.YT_COOKIES_PATH);
+}
 
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -39,9 +55,19 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function runYtDlp(url: string): Promise<YTResult> {
+function hasPlayableAudio(info: YTResult): boolean {
+  if (!Array.isArray(info.formats) || info.formats.length === 0) return true;
+  return info.formats.some((f) => f.acodec && f.acodec !== 'none');
+}
+
+function isAgeRestrictedError(stderr: string): boolean {
+  return /confirm your age|age-restricted|inappropriate|Sign in to confirm/i.test(stderr);
+}
+
+function runYtDlp(url: string, useAuth = false): Promise<YTResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(YT_DLP, [url, ...FLAGS], {
+    const flags = useAuth ? [...BASE_FLAGS, ...getAuthFlags()] : BASE_FLAGS;
+    const proc = spawn(YT_DLP, [url, ...flags], {
       windowsHide: true,
       timeout: 30_000,
     });
@@ -55,7 +81,12 @@ function runYtDlp(url: string): Promise<YTResult> {
     proc.on('error', (err) => reject(err));
     proc.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`yt-dlp exited with code ${code}: ${stderr.slice(0, 200)}`));
+        const msg = stderr.slice(0, 200);
+        if (isAgeRestrictedError(msg)) {
+          reject(new AgeRestrictedError(msg));
+          return;
+        }
+        reject(new Error(`yt-dlp exited with code ${code}: ${msg}`));
         return;
       }
       try {
@@ -116,27 +147,51 @@ export async function resolveTrack(
   query: string,
   requestedBy: string
 ): Promise<Track | Track[]> {
-  const baseFlags = [...FLAGS];
-
   if (/^https?:\/\//.test(query)) {
     const target = normalizeUrl(query);
-    const result = await runYtDlp(target);
 
-    if (result._type === 'playlist' || result._type === 'url_playlist') {
-      const tracks = playlistTracks(result, requestedBy);
+    let info: YTResult;
+    let usedAuth = false;
+    try {
+      info = await runYtDlp(target);
+    } catch (err) {
+      if (err instanceof AgeRestrictedError && hasAuth()) {
+        usedAuth = true;
+        try {
+          info = await runYtDlp(target, true);
+        } catch (retryErr) {
+          if (retryErr instanceof AgeRestrictedError) {
+            throw new Error('No se pudo verificar la edad del video aun con cookies. Revisa que las cookies sean válidas.');
+          }
+          throw retryErr;
+        }
+      } else if (err instanceof AgeRestrictedError) {
+        throw new Error('Este video está restringido por edad. Configuralo en el .env con YT_COOKIES_PATH o YT_COOKIES_FROM_BROWSER.');
+      } else {
+        throw err;
+      }
+    }
+
+    if (info._type === 'playlist' || info._type === 'url_playlist') {
+      const tracks = playlistTracks(info, requestedBy);
       if (tracks.length === 0) throw new Error('La playlist está vacía.');
       return tracks;
     }
 
+    if (!hasPlayableAudio(info)) {
+      throw new Error('Este video no tiene audio disponible para reproducir (posiblemente esté bloqueado o sea inválido).');
+    }
+
     return {
       url: query,
-      title: result.title ?? 'Unknown',
-      duration: formatDuration(result.duration ?? 0),
-      durationMs: (result.duration ?? 0) * 1000,
+      title: info.title ?? 'Unknown',
+      duration: formatDuration(info.duration ?? 0),
+      durationMs: (info.duration ?? 0) * 1000,
       source: 'youtube',
-      thumbnail: result.thumbnail,
-      author: result.channel ?? result.uploader,
+      thumbnail: info.thumbnail,
+      author: info.channel ?? info.uploader,
       requestedBy,
+      needsAuth: usedAuth,
     };
   }
 
@@ -149,7 +204,31 @@ export async function resolveTrack(
   const videoUrl = first.webpage_url || first.url;
   if (!videoUrl) throw new Error('No se pudo obtener la URL del video.');
 
-  const info = await runYtDlp(videoUrl);
+  let info: YTResult;
+  let usedAuth = false;
+  try {
+    info = await runYtDlp(videoUrl);
+  } catch (err) {
+    if (err instanceof AgeRestrictedError && hasAuth()) {
+      usedAuth = true;
+      try {
+        info = await runYtDlp(videoUrl, true);
+      } catch (retryErr) {
+        if (retryErr instanceof AgeRestrictedError) {
+          throw new Error('No se pudo verificar la edad del video aun con cookies. Revisa que las cookies sean válidas.');
+        }
+        throw retryErr;
+      }
+    } else if (err instanceof AgeRestrictedError) {
+      throw new Error('Este video está restringido por edad. Configuralo en el .env con YT_COOKIES_PATH o YT_COOKIES_FROM_BROWSER.');
+    } else {
+      throw err;
+    }
+  }
+
+  if (!hasPlayableAudio(info)) {
+    throw new Error('Este video no tiene audio disponible para reproducir (posiblemente esté bloqueado o sea inválido).');
+  }
 
   return {
     url: videoUrl,
@@ -160,6 +239,7 @@ export async function resolveTrack(
     thumbnail: info.thumbnail,
     author: info.channel ?? info.uploader,
     requestedBy,
+    needsAuth: usedAuth,
   };
 }
 

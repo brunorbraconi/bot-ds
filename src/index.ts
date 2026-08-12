@@ -21,7 +21,9 @@ import path from 'path';
 
 const commands = new Map<string, (interaction: any) => Promise<void>>();
 const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter((f) => f.endsWith('.ts') || f.endsWith('.js'));
+const commandFiles = fs.readdirSync(commandsPath).filter(
+  (f) => (f.endsWith('.ts') || f.endsWith('.js')) && !f.endsWith('.d.ts')
+);
 
 for (const file of commandFiles) {
   const command = require(path.join(commandsPath, file));

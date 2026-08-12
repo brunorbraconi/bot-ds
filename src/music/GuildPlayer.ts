@@ -12,6 +12,7 @@ import {
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Message, TextChannel } from 'discord.js';
 import { Track } from './Track';
 import { logger } from '../utils/logger';
+import { hasAuth } from '../utils/resolver';
 import { client } from '../client';
 import { nowPlayingEmbed } from '../utils/embed';
 import { spawn } from 'child_process';
@@ -72,6 +73,15 @@ export class GuildPlayer {
   get isPaused(): boolean { return this.player.state.status === AudioPlayerStatus.Paused; }
 
   setTextChannel(channel: TextChannel): void { this.textChannel = channel; }
+
+  private async notifyTrackFailed(track: Track, reason: string): Promise<void> {
+    if (!this.textChannel) return;
+    try {
+      await this.textChannel.send(`⚠️ No se pudo reproducir **${track.title}**: ${reason}`);
+    } catch (err) {
+      logger.error(`[${this.guildId}] Failed to send track failed message:`, err);
+    }
+  }
 
   pause(): void {
     this.player.pause();
@@ -263,12 +273,20 @@ export class GuildPlayer {
 
     logger.info(`[${this.guildId}] Spawning yt-dlp for: ${track.url}`);
 
-    const yt = ytDlpExec.exec(track.url, {
+    const ytOpts: Record<string, unknown> = {
       format: 'bestaudio[ext=m4a]/bestaudio',
       output: '-',
       noWarnings: true,
       noCheckCertificates: true,
-    });
+      ignoreNoFormatsError: true,
+    };
+    if (track.needsAuth && hasAuth()) {
+      if (process.env.YT_COOKIES_FROM_BROWSER) ytOpts.cookiesFromBrowser = process.env.YT_COOKIES_FROM_BROWSER;
+      if (process.env.YT_COOKIES_PATH) ytOpts.cookies = process.env.YT_COOKIES_PATH;
+    }
+
+    const yt = ytDlpExec.exec(track.url, ytOpts);
+    (yt as unknown as Promise<unknown>).catch(() => {});
 
     const ff = spawn(ffmpegPath, [
       '-analyzeduration', '0',
@@ -285,7 +303,12 @@ export class GuildPlayer {
     yt.stdout?.pipe(ff.stdin);
 
     const noop = () => {};
-    if (yt.stdout) yt.stdout.on('error', noop);
+    let streamStarted = false;
+    const ytErrors: string[] = [];
+    if (yt.stdout) {
+      yt.stdout.on('error', noop);
+      yt.stdout.on('data', () => { streamStarted = true; });
+    }
     if (yt.stderr) yt.stderr.on('error', noop);
     if (ff.stdin) ff.stdin.on('error', noop);
     ff.stdout.on('error', noop);
@@ -293,10 +316,26 @@ export class GuildPlayer {
     if (yt.stderr) {
       yt.stderr.on('data', (d: Buffer) => {
         const msg = d.toString().trim();
-        if (msg) logger.debug(`[yt-dlp] ${msg}`);
+        if (msg) {
+          logger.debug(`[yt-dlp] ${msg}`);
+          if (ytErrors.length < 5) ytErrors.push(msg);
+        }
       });
     }
     yt.on('error', (err: Error) => logger.error(`[${this.guildId}] yt-dlp:`, err.message));
+    yt.on('close', (code: number | null) => {
+      if (streamStarted) return;
+      if (code !== null && code === 0) return;
+      logger.error(`[${this.guildId}] yt-dlp failed for ${track.url}: ${ytErrors.slice(0, 3).join(' ').slice(0, 300)}`);
+      const raw = ytErrors.join(' ').toLowerCase();
+      const reason = /age|sign in/i.test(raw)
+        ? 'está restringido por edad.'
+        : 'no tiene audio disponible o está bloqueado.';
+      this.notifyTrackFailed(track, reason);
+      if (this.currentProcess?.yt === yt && this.player.state.status !== AudioPlayerStatus.Idle) {
+        try { this.player.stop(true); } catch {}
+      }
+    });
 
     ff.stderr.on('data', (d: Buffer) => {
       const msg = d.toString().trim();

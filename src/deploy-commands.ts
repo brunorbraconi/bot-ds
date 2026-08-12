@@ -17,7 +17,9 @@ if (!token || !clientId) {
 
 const commands: unknown[] = [];
 const commandsPath = path.join(__dirname, 'commands');
-const files = fs.readdirSync(commandsPath).filter((f) => f.endsWith('.ts') || f.endsWith('.js'));
+const files = fs.readdirSync(commandsPath).filter(
+  (f) => (f.endsWith('.ts') || f.endsWith('.js')) && !f.endsWith('.d.ts')
+);
 
 for (const file of files) {
   const command = require(path.join(commandsPath, file));

@@ -9,4 +9,5 @@ export interface Track {
   thumbnail?: string;
   author?: string;
   requestedBy: string;
+  needsAuth?: boolean;
 }
