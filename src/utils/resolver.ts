@@ -1,12 +1,18 @@
 import { spawn } from 'child_process';
 import { Track, TrackSource } from '../music/Track';
 
+interface YTThumbnail {
+  url?: string;
+}
+
 interface YTEntry {
+  id?: string;
   title?: string;
   url?: string;
   webpage_url?: string;
   duration?: number;
   thumbnail?: string;
+  thumbnails?: YTThumbnail[];
   channel?: string;
   uploader?: string;
 }
@@ -23,6 +29,7 @@ interface YTResult {
 
 const YT_DLP = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
 const FLAGS = ['--dump-single-json', '--no-warnings', '--no-check-certificate', '--flat-playlist'];
+const MAX_PLAYLIST_ITEMS = 500;
 
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -60,6 +67,51 @@ function runYtDlp(url: string): Promise<YTResult> {
   });
 }
 
+function isVideoHost(hostname: string): boolean {
+  return (
+    hostname === 'youtu.be' ||
+    hostname === 'www.youtube.com' ||
+    hostname === 'm.youtube.com' ||
+    hostname === 'music.youtube.com' ||
+    hostname.endsWith('.youtube.com')
+  );
+}
+
+/**
+ * YouTube (youtu.be / www.youtube.com / m.youtube.com / music.youtube.com) trata el
+ * parametro `list` como contexto de playlist aunque el usuario solo haya compartido un
+ * video. Para esos enlaces (tienen `v=` o son youtu.be) quitamos `list`, `start_radio`
+ * e `index` y resolvemos el video en solitario. Los enlaces de playlist reales
+ * (playlist?list=...) se dejan intactos.
+ */
+function normalizeUrl(query: string): string {
+  const u = new URL(query);
+  if (!isVideoHost(u.hostname)) return query;
+  if (u.hostname !== 'youtu.be' && !u.searchParams.has('v')) return query;
+  for (const p of ['list', 'start_radio', 'index']) u.searchParams.delete(p);
+  return u.toString();
+}
+
+function playlistTracks(result: YTResult, requestedBy: string): Track[] {
+  const entries = (result.entries || []).slice(0, MAX_PLAYLIST_ITEMS);
+  return entries
+    .map((entry: YTEntry) => {
+      const videoUrl = entry.webpage_url || entry.url;
+      if (!videoUrl) return null;
+      return {
+        url: videoUrl,
+        title: entry.title ?? 'Unknown',
+        duration: formatDuration(entry.duration ?? 0),
+        durationMs: (entry.duration ?? 0) * 1000,
+        source: 'youtube' as TrackSource,
+        thumbnail: entry.thumbnail || entry.thumbnails?.[0]?.url || (entry.id ? `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg` : undefined),
+        author: entry.channel ?? entry.uploader,
+        requestedBy,
+      } as Track;
+    })
+    .filter(Boolean) as Track[];
+}
+
 export async function resolveTrack(
   query: string,
   requestedBy: string
@@ -67,40 +119,13 @@ export async function resolveTrack(
   const baseFlags = [...FLAGS];
 
   if (/^https?:\/\//.test(query)) {
-    const result = await runYtDlp(query);
+    const target = normalizeUrl(query);
+    const result = await runYtDlp(target);
 
     if (result._type === 'playlist' || result._type === 'url_playlist') {
-      const entries = result.entries || [];
-      if (entries.length === 0) throw new Error('La playlist está vacía.');
-
-      return Promise.all(
-        entries.map(async (entry: YTEntry) => {
-          const videoUrl = entry.webpage_url || entry.url;
-          if (!videoUrl) return null;
-          try {
-            const info = await runYtDlp(videoUrl);
-            return {
-              url: videoUrl,
-              title: entry.title ?? info.title ?? 'Unknown',
-              duration: formatDuration(info.duration ?? 0),
-              durationMs: (info.duration ?? 0) * 1000,
-              source: 'youtube' as TrackSource,
-              thumbnail: info.thumbnail,
-              author: info.channel ?? info.uploader,
-              requestedBy,
-            } as Track;
-          } catch {
-            return {
-              url: videoUrl,
-              title: entry.title ?? 'Unknown',
-              duration: '0:00',
-              durationMs: 0,
-              source: 'youtube' as TrackSource,
-              requestedBy,
-            } as Track;
-          }
-        })
-      ).then((tracks) => tracks.filter(Boolean) as Track[]);
+      const tracks = playlistTracks(result, requestedBy);
+      if (tracks.length === 0) throw new Error('La playlist está vacía.');
+      return tracks;
     }
 
     return {
