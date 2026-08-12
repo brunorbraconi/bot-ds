@@ -95,6 +95,10 @@ export class GuildPlayer {
       adapterCreator: guild.voiceAdapterCreator,
     });
 
+    this.connection.on('error', (err) => {
+      logger.error(`[${this.guildId}] Voice connection error:`, err.message);
+    });
+
     this.connection.on('debug', (msg) => {
       logger.debug(`[${this.guildId}] Voice debug: ${msg}`);
     });
@@ -279,6 +283,12 @@ export class GuildPlayer {
 
     this.currentProcess = { yt, ff };
     yt.stdout?.pipe(ff.stdin);
+
+    const noop = () => {};
+    if (yt.stdout) yt.stdout.on('error', noop);
+    if (yt.stderr) yt.stderr.on('error', noop);
+    if (ff.stdin) ff.stdin.on('error', noop);
+    ff.stdout.on('error', noop);
 
     if (yt.stderr) {
       yt.stderr.on('data', (d: Buffer) => {

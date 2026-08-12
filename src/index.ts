@@ -109,6 +109,14 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception (kept alive):', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection (kept alive):', reason);
+});
+
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
   logger.error('DISCORD_TOKEN is not set in .env');
