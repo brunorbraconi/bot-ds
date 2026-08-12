@@ -1,0 +1,7 @@
+{
+  "watch": ["dist", "src"],
+  "ignore": ["node_modules", "playlists.db*", "*.db", "*.db-shm", "*.db-wal", "test-*.js"],
+  "ext": "js,ts,json",
+  "restartable": "rs",
+  "delay": "1000"
+}
