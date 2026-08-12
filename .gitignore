@@ -3,3 +3,4 @@ dist/
 discloud.config
 .env
 *.db
+cookies.txt
