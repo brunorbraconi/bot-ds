@@ -280,7 +280,7 @@ export class GuildPlayer {
       noCheckCertificates: true,
       ignoreNoFormatsError: true,
     };
-    if (track.needsAuth && hasAuth()) {
+    if (hasAuth()) {
       if (process.env.YT_COOKIES_FROM_BROWSER) ytOpts.cookiesFromBrowser = process.env.YT_COOKIES_FROM_BROWSER;
       if (process.env.YT_COOKIES_PATH) ytOpts.cookies = process.env.YT_COOKIES_PATH;
     }

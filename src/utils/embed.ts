@@ -34,12 +34,17 @@ export function queueEmbed(tracks: Track[], current: Track | null, loop: string)
   if (tracks.length === 0) {
     embed.addFields({ name: 'Siguientes', value: 'No hay más canciones en la cola.' });
   } else {
-    const lines = tracks.slice(0, 20).map((t, i) =>
-      `**${i + 1}.** [${t.title}](${t.url}) \`${t.duration}\``
-    );
+    const lines: string[] = [];
+    let length = 0;
+    for (let i = 0; i < tracks.length; i++) {
+      const line = `**${i + 1}.** [${tracks[i].title}](${tracks[i].url}) \`${tracks[i].duration}\``;
+      if (lines.length > 0 && length + line.length + 1 > 1024) break;
+      lines.push(line);
+      length += line.length + 1;
+    }
     embed.addFields({ name: `Siguientes (${tracks.length})`, value: lines.join('\n') });
-    if (tracks.length > 20) {
-      embed.setFooter({ text: `Y ${tracks.length - 20} más...` });
+    if (lines.length < tracks.length) {
+      embed.setFooter({ text: `Y ${tracks.length - lines.length} más...` });
     }
   }
 
